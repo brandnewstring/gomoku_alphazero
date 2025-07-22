@@ -1,0 +1,20 @@
+iteration: 900 time: 177h 47min
+
+temp = 1.0  # the temperature param
+learn_rate = 2e-3
+lr_multiplier = 1.0  # adaptively adjust the learning rate based on KL
+batch_size = 512  # mini-batch size for training
+data_buffer = deque(maxlen=5000) # data buffer with size 10000
+epochs = 5  # num of train_steps for each update
+kl_targ = 0.02
+game_batch_num = 1000
+c_puct = 5
+n_playout = 1000  # number of simulation for each state during mcts
+gamma = 0.99 # in gomoku the best strategy should finish the game ASAP. This param devalues the game that wins using too many moves.
+# params for model evaluation
+check_freq = 15 # how frequent we check for the best model
+total_games = 120 # total num of games we run to determine which model is better
+win_threshold = 0.02 # the win rate threshold for a model to be considered better
+# general game and model params
+board_size = 11  # yes it's square, no point making length and width different IMO.
+draw_threshold = 0.7 # if 70% of the board is filled, treat it as a draw.
