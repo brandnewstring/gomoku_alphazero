@@ -19,7 +19,7 @@ from policy_value_net import PolicyValueNet
 learn_rate = 2e-3
 lr_multiplier = 1.0  # adaptively adjust the learning rate based on KL
 batch_size = 512  # mini-batch size for training
-data_buffer = deque(maxlen=10000) # data buffer with size 7000
+data_buffer = deque(maxlen=100000) # data buffer with size 7000
 epochs = 5  # num of train_steps for each update
 kl_targ = 0.02
 game_batch_num = 5000

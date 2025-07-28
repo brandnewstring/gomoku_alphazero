@@ -54,7 +54,9 @@ Then, open the index.html file in your web browser to play against the AI throug
 
 ## Current Model Status
 
-The current model has been trained for 160 hours on an 11x11 Gomoku board.
+The 11x11 model was trained for 160 hours for ~1000 iteration based on the very first version.
+
+The 13x13 model was trained for 47 hours for 730 iterations due to the accerlation of the new version of code.
 
 ## Future Plans
 Will continuing optimize the program and train model for larger board.
