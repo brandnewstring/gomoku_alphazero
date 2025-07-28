@@ -1,10 +1,20 @@
 import copy
+import math
+import time
 
 import numpy as np
 
-c_puct = 5
+from config import board_size, draw_threshold
+
+c_puct = 5 # a number in (0, inf) controlling the relative impact of value Q, and prior probability P, on this node's score.
 n_playout = 1000  # number of simulation for each state during mcts
-gamma = 0.99 # in gomoku the best strategy should finish the game ASAP. This param devalues the game that wins using too many moves.
+gamma = 0.98 # in gomoku the best strategy should finish the game ASAP. This param devalues the game that wins using too many moves.
+max_depth = math.ceil(board_size*board_size*draw_threshold) + 1
+gamma_powers = [gamma**i for i in range(max_depth + 1)]
+epsilon = 0.25
+alpha = 10 / (board_size * board_size)
+temp = 1.0  # the temperature param
+
 
 def softmax(x):
     probs = np.exp(x - np.max(x))
@@ -23,27 +33,35 @@ class TreeNode(object):
     def __init__(self, parent, prior_p):
         self._parent = parent
         self._children = {}  # a map from action to TreeNode
-        self._n_visits = np.uint16(0)
-        self._Q = np.float16(0)
-        self._u = np.float16(0)
-        self._P = np.float16(prior_p)
+        self._n_visits = 0
+        self._Q = 0.0
+        self._u = 0.0
+        self._P = prior_p
 
-    def expand(self, action_priors):
-        """Expand tree by creating new children.
-        action_priors: a list of tuples of actions and their prior probability
+    def expand(self, priors, legal_positions):
+        """Expand tree by creating new children. It also adds dirichlet noise as AlphaZero.
+         priors: a list of tuples of actions and their prior probability
             according to the policy function.
         """
-        for action, prob in action_priors:
-            if action not in self._children:
-                self._children[action] = TreeNode(self, prob)
+        # 根节点加 Dirichlet 噪声
+        if self.is_root():
+            noise = np.random.dirichlet([alpha] * len(legal_positions))
+            priors = (1 - epsilon) * priors + epsilon * noise
+    
+        # 建立子节点
+        for a, p in zip(legal_positions, priors):
+            if a not in self._children:
+                self._children[a] = TreeNode(self, p)
+            else:
+                raise ValueError(f"Child node for action {a} already exists!")
 
-    def select(self, c_puct):
+    def select(self):
         """Select action among children that gives maximum action value Q
         plus bonus u(P).
         Return: A tuple of (action, next_node)
         """
         return max(self._children.items(),
-                   key=lambda act_node: act_node[1].get_value(c_puct))
+                   key=lambda act_node: act_node[1].get_value())
 
     def update(self, leaf_value):
         """Update node values from leaf evaluation.
@@ -51,10 +69,9 @@ class TreeNode(object):
             perspective.
         """
         # Count visit.
-        self._n_visits = np.uint16(self._n_visits + 1)
+        self._n_visits = self._n_visits + 1
         # Update Q, a running average of values for all visits.
-        self._Q = np.float16(self._Q + 1.0 *
-                             (leaf_value - self._Q) / self._n_visits)
+        self._Q = self._Q + 1.0 * (leaf_value - self._Q) / self._n_visits
 
     def update_recursive(self, leaf_value):
         """Like a call to update(), but applied recursively for all ancestors.
@@ -64,28 +81,24 @@ class TreeNode(object):
             self._parent.update_recursive(-leaf_value)
         self.update(leaf_value)
 
-    def get_value(self, c_puct):
+    def get_value(self):
         """Calculate and return the value for this node.
         It is a combination of leaf evaluations Q, and this node's prior
         adjusted for its visit count, u.
-        c_puct: a number in (0, inf) controlling the relative impact of
-            value Q, and prior probability P, on this node's score.
         """
-        self._u = np.float16(
-            (c_puct * self._P * np.sqrt(self._parent._n_visits) /
-             (1 + self._n_visits)))
-        return np.float16(self._Q + self._u)
+        self._u = (c_puct * self._P * math.sqrt(self._parent._n_visits) / (1 + self._n_visits))
+        return self._Q + self._u
 
     def is_leaf(self):
         """Check if leaf node (i.e. no nodes below this have been expanded)."""
-        return self._children == {}
+        return not self._children
 
     def is_root(self):
         return self._parent is None
 
 
-class MCTS(object):
-    """An implementation of Monte Carlo Tree Search."""
+class MCTSPlayer(object):
+    """A Monte Carlo Tree Search Player who holds a MCTS tree."""
 
     def __init__(self, policy_value_fn):
         """
@@ -93,12 +106,9 @@ class MCTS(object):
             a list of (action, probability) tuples and also a score in [-1, 1]
             (i.e. the expected value of the end game score from the current
             player's perspective) for the current player.
-        c_puct: a number in (0, inf) that controls how quickly exploration
-            converges to the maximum-value policy. A higher value means
-            relying on the prior more.
         """
         self._root = TreeNode(None, 1.0)
-        self._policy = policy_value_fn
+        self._policy_value_fn = policy_value_fn
 
     def _playout(self, state):
         """Run a single playout from the root to the leaf, getting a value at
@@ -111,105 +121,70 @@ class MCTS(object):
             if node.is_leaf():
                 break
             # Greedily select next move.
-            action, node = node.select(c_puct)
+            action, node = node.select()
             state.do_move(action)
             step_count += 1
 
-        # Evaluate the leaf using a network which outputs a list of
-        # (action, probability) tuples p and also a score v in [-1, 1]
-        # for the current player.
-        action_probs, leaf_value = self._policy(state)
-        # Check for end of game.
         end, winner = state.game_end()
-        if not end:
-            node.expand(action_probs)
-        else:
-            # for end state，return the "true" leaf_value
-            if winner == 0:  # tie
-                leaf_value = 0.0
+        if end:
+            # if game already ends, no need to predict using network
+            if winner == 0:
+                return
             else:
-                leaf_value = (1.0 if winner == state.current_player else -1.0)
+                leaf_value = 1.0 if winner == state.current_player else -1.0
+                leaf_value *= gamma_powers[step_count]
+        else:
+            # if game not end, we need to expand. we also need to use the predicted value
+            # to update the parents because it's the 1st time expand the node.
+            legal_probs, leaf_value, legal_positions = self._policy_value_fn(state)
+            node.expand(legal_probs, legal_positions)
 
-        # Update value and visit count of nodes in this traversal.
-        leaf_value *= gamma**step_count
         node.update_recursive(-leaf_value)
 
-    def get_move_probs(self, state, temp=1e-3):
-        """Run all playouts sequentially and return the available actions and
-        their corresponding probabilities.
-        state: the current game state
-        temp: temperature parameter in (0, 1] controls the level of exploration
+    def get_action(self, state, show=False):
         """
-        for n in range(n_playout):
+        Gets the next move using mcts given a board state. Returns the move and the move probabilities for the whole board.
+        """
+        valid_moves = np.array(state.get_valid_moves(), dtype=np.int32)
+
+        # --- 1. MCTS playout ---
+        n = n_playout
+        while n > 0:
+            n -= 1
             state_copy = copy.deepcopy(state)
             self._playout(state_copy)
-
-        # calc the move probabilities based on visit counts at the root node
-        act_visits = [(act, node._n_visits)
-                      for act, node in self._root._children.items()]
-        acts, visits = zip(*act_visits)
-        act_probs = softmax(1.0 / temp * np.log(np.array(visits) + 1e-10))
-
-        return acts, act_probs
-
+    
+        # --- 2. 直接构造合法落子的访问次数 ---
+        visits = np.array(
+            [self._root._children.get(a)._n_visits if a in self._root._children else 0 for a in valid_moves],
+            dtype=np.float32
+        )
+    
+        # --- 3. 转成概率（softmax） ---
+        if visits.sum() > 0:
+            scaled = np.log(visits + 1e-10) / temp
+            legal_probs = softmax(scaled)
+        else:
+            legal_probs = np.ones(len(valid_moves), dtype=np.float32) / len(valid_moves)
+    
+        # --- 4. 采样动作（仅在合法落子集合中） ---
+        move = np.random.choice(valid_moves, p=legal_probs)
+    
+        # --- 5. 构造完整棋盘概率向量 ---
+        full_probs = np.zeros(board_size * board_size, dtype=np.float32)
+        full_probs[valid_moves] = legal_probs
+    
+        # --- 6. 更新树 ---
+        self.update_with_move(move)
+    
+        return move, full_probs
+    
     def update_with_move(self, last_move):
         """Step forward in the tree, keeping everything we already know
         about the subtree.
         """
-        if last_move in self._root._children:
-            self._root = self._root._children[last_move]
-            self._root._parent = None
-        else:
-            self._root = TreeNode(None, 1.0)
-
-
-class MCTSPlayer(object):
-    """MCTS Player for self play"""
-
-    def __init__(self, policy_value_function):
-        self.mcts = MCTS(policy_value_function)
-        # self.policy_value_fn = policy_value_function
+        self._root = self._root._children[last_move]
+        self._root._parent = None
 
     def reset_player(self):
         self._root = TreeNode(None, 1.0)
-
-    # def clear(self):
-    #     self.mcts = None
-
-    def get_action(self, board, temp=1e-3, show=False):
-        valid_moves = board.get_valid_moves()
-        if len(valid_moves) == 0:
-            print("WARNING: the board is full")
-            return
-
-        # 获取 MCTS 原始概率
-        acts, probs = self.mcts.get_move_probs(board, temp)
-
-        # 提取合法动作及概率
-        legal_acts_probs = [(a, p) for a, p in zip(acts, probs) if a in valid_moves]
-    
-        if not legal_acts_probs:
-            # fallback 均匀分布
-            legal_acts = list(valid_moves)
-            legal_probs = [1.0 / len(valid_moves)] * len(valid_moves)
-        else:
-            legal_acts, legal_probs = zip(*legal_acts_probs)
-            legal_acts = list(legal_acts)
-            legal_probs = list(legal_probs)
-            total_prob = sum(legal_probs)
-            if total_prob > 0:
-                legal_probs = [p / total_prob for p in legal_probs]
-            else:
-                legal_probs = [1.0 / len(legal_acts)] * len(legal_acts)
-    
-        # 构建 move_probs 全局向量
-        move_probs = np.zeros(board.size * board.size)
-        move_probs[legal_acts] = legal_probs
-
-        # 自对弈：加入 Dirichlet 噪声
-        noise = np.random.dirichlet(0.3 * np.ones(len(valid_moves)))
-        mixed_probs = 0.85 * move_probs[list(valid_moves)] + 0.15 * noise
-        move = np.random.choice(list(valid_moves), p=mixed_probs / mixed_probs.sum())
-        self.mcts.update_with_move(move)
-
-        return move, move_probs

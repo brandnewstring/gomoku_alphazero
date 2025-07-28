@@ -90,11 +90,16 @@ class PolicyValueNet:
         legal_positions = board.get_valid_moves()
         current_state = np.ascontiguousarray(board.current_state().reshape(
             -1, 4, self.board_size, self.board_size))
-        act_probs, value = self.model.predict(current_state, verbose=0)
-        act_probs = act_probs.flatten()
-        value = value[0][0]
-        act_probs = zip(legal_positions, act_probs[legal_positions])
-        return act_probs, value
+        # act_probs, value = self.model.predict(current_state, verbose=0)
+        act_probs, value = self.model(current_state, training=False)
+        # act_probs = act_probs.flatten()
+        act_probs = act_probs.numpy().flatten()
+        value = value.numpy()[0][0]
+        # value = value[0][0]
+        # act_probs = zip(legal_positions, act_probs[legal_positions])
+        legal_probs = act_probs[legal_positions]
+        
+        return legal_probs, value, legal_positions
 
     def train_step(self, state_batch, mcts_probs, winner_batch, lr):
         """Perform a training step"""

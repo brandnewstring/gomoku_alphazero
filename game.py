@@ -6,7 +6,7 @@ import numpy as np
 class Board(object):
     """The board for a single game."""
 
-    def __init__(self, size, n_in_row=5, start_player=1, draw_threshold=1 ,**kwargs):
+    def __init__(self, size, n_in_row=5, start_player=1, draw_threshold=1.0 ,**kwargs):
         if start_player not in (1, -1):
             raise ValueError("start_player must be 1 or -1")
         if n_in_row != 5:
@@ -187,11 +187,6 @@ class Board(object):
         else:
             return False, []
 
-    def move_to_location(self, move):
-        if not (0 <= move < self.num_grids):
-            raise ValueError(f"Invalid move index: {move}")
-        return [move // self.size, move % self.size]
-
     def location_to_move(self, location):
         if len(location) != 2:
             raise ValueError(f"Invalid location format: {location}")
@@ -227,32 +222,11 @@ class Board(object):
             square_state[3][:, :] = 1.0
 
         return square_state[:, ::-1, :]
-        # if self.states:
-        #     moves, players = np.array(list(zip(*self.states.items())))
-        #     move_curr = moves[players == self.current_player]
-        #     move_oppo = moves[players != self.current_player]
-        #     square_state[0][move_curr // self.width,
-        #                     move_curr % self.height] = 1.0
-        #     square_state[1][move_oppo // self.width,
-        #                     move_oppo % self.height] = 1.0
-        #     # indicate the last move location
-        #     square_state[2][self.last_move // self.width,
-        #                     self.last_move % self.height] = 1.0
-        # if len(self.states) % 2 == 0:
-        #     square_state[3][:, :] = 1.0  # indicate the color to play
-        # return square_state[:, ::-1, :]
         
-
     def do_move(self, move):
-        location = self.move_to_location(move)
-        # self.states[move] = self.current_player
-        self.board[location[0]][location[1]] = self.current_player
-        # self.availables.remove(move)
+        r, c = divmod(move, self.size)
+        self.board[r][c] = self.current_player
         self.total_moves = self.total_moves + 1
-        # self.current_player = (
-        #     self.players[0] if self.current_player == self.players[1]
-        #     else self.players[1]
-        # )
         self.current_player = self.current_player * -1
         self.last_move = move
 
@@ -269,21 +243,36 @@ class Board(object):
         if self.total_moves < n * 2 - 1:
             return False, -1
 
-        # check if win
-        for r in range(size):
-            for c in range(size):
-                player = self.board[r][c]
-                if player == 0:
-                    continue
-                if c <= size - n and all(self.board[r][c + i] == player for i in range(n)):
-                    return True, player
-                if r <= size - n and all(self.board[r + i][c] == player for i in range(n)):
-                    return True, player
-                if r <= size - n and c <= size - n and all(self.board[r + i][c + i] == player for i in range(n)):
-                    return True, player
-                if r <= size - n and c >= n - 1 and all(self.board[r + i][c - i] == player for i in range(n)):
-                    return True, player
-        # if board full, draw
+
+        r_last, c_last = divmod(self.last_move, size)
+        player = self.board[r_last][c_last]
+        directions = [(0, 1), (1, 0), (1, 1), (1, -1)]
+        for dr, dc in directions:
+            # 向反方向回溯，找到连珠的起点
+            current_r, current_c = r_last, c_last
+            while True:
+                prev_r, prev_c = current_r - dr, current_c - dc
+                if (0 <= prev_r < size and 0 <= prev_c < size and
+                    self.board[prev_r][prev_c] == player):
+                    current_r, current_c = prev_r, prev_c
+                else:
+                    break
+            
+            # 从回溯到的起点开始，向前计数连子数
+            count = 0
+            # start_r, start_c = current_r, current_c
+            while True:
+                if (0 <= current_r < size and 0 <= current_c < size and
+                    self.board[current_r][current_c] == player):
+                    count += 1
+                    current_r += dr
+                    current_c += dc
+                else:
+                    break
+            
+            if count >= n:
+                return True, player # 发现 n 连珠        
+
         if self.total_moves >= size * size:
             return True, 0
     
@@ -307,120 +296,3 @@ class Board(object):
                 else:
                     print('_'.center(8), end='')
             print('\r\n\r\n')        
-
-# class Game(object):
-#     """game server"""
-
-#     def start_play(self, board, player1, player2, is_shown=1):
-#         """start a game between two players"""
-#         players = {1: player1, -1: player2}
-#         while True:
-#             player_in_turn = players[board.current_player]
-#             move, move_probs = player_in_turn.get_action(copy.deepcopy(board), show=True)
-#             board.do_move(move)
-#             if is_shown:
-#                 board.print_board()
-#             end, winner = board.game_end()
-#             if end:
-#                 if is_shown:
-#                     if winner != 0:
-#                         print("Game end. Winner is", players[winner])
-#                     else:
-#                         print("Game end. Tie")
-#                 return winner
-
-#     def start_evaluate(self, board, player1, player2, is_shown=1):
-#         """evaluates two models"""
-#         players = {1: player1, -1: player2}
-#         while True:
-#             player_in_turn = players[board.current_player]
-#             act_probs, value = player_in_turn.policy_value_fn(copy.deepcopy(board))
-#             move = self.sample_from_top_k_with_ties(act_probs)
-#             board.do_move(move)
-
-#             if board.total_moves > 0.7 * board.num_grids:
-#                 board.print_board()
-#                 print("70% board used. consider tie.")
-#                 return 0
-            
-#             end, winner = board.game_end()
-#             if end:
-#                 if is_shown:
-#                     board.print_board()
-#                 return winner
-
-#     def sample_from_top_k_with_ties(self, input_dict, k=3):
-#         """
-#         从概率前k（含并列）的元素中按归一化概率随机返回一个key。
-    
-#         参数:
-#             input_dict (dict): 形如 {元素: 概率} 的字典。
-#             k (int): 前k名（含并列）
-    
-#         返回:
-#             key: 按归一化概率选中的一个key
-    
-#         异常:
-#             ValueError: 如果选中的前k项概率总和为0，则抛出异常。
-#         """
-#         if isinstance(input_dict, zip):
-#             input_dict = dict(input_dict)
-        
-#         if not input_dict or k <= 0:
-#             raise ValueError("输入字典不能为空，且k必须大于0。")
-    
-#         # 步骤1：获取前k名的概率阈值
-#         sorted_probs = sorted(set(input_dict.values()), reverse=True)
-#         if len(sorted_probs) < k:
-#             threshold = sorted_probs[-1]
-#         else:
-#             threshold = sorted_probs[k - 1]
-    
-#         # 步骤2：获取所有满足条件的key及其原始概率
-#         top_items = {key: prob for key, prob in input_dict.items() if prob >= threshold}
-    
-#         # 步骤3：归一化概率
-#         total = sum(top_items.values())
-#         if total == 0:
-#             raise ValueError("前k名（含并列）的元素总概率为0，无法归一化。")
-    
-#         probs = [v / total for v in top_items.values()]
-#         keys = list(top_items.keys())
-    
-#         # 步骤4：按归一化概率抽样
-#         return np.random.choice(keys, p=probs)
-    
-#     def start_self_play(self, board, player, is_shown=1, temp=1e-3):
-#         """ start a self-play game using a MCTS player, reuse the search tree,
-#         and store the self-play data: (state, mcts_probs, z) for training
-#         """
-#         # p1, p2 = board.players
-#         states, mcts_probs, current_players = [], [], []
-#         while True:
-#             move, move_probs = player.get_action(board, temp=temp)
-#             # store the data
-#             states.append(board.current_state().astype(np.float32))
-#             mcts_probs.append(move_probs.astype(np.float32))
-#             current_players.append(board.current_player)
-#             # perform a move
-#             board.do_move(move)
-#             # if is_shown:
-#             #     self.graphic(board, p1, p2)
-#             end, winner = board.game_end()
-#             if end:
-#                 # winner from the perspective of the current player of each state
-#                 winners_z = np.zeros(len(current_players))
-#                 if winner != 0:
-#                     winners_z[np.array(current_players) == winner] = 1.0
-#                     winners_z[np.array(current_players) != winner] = -1.0
-#                 # reset MCTS root node
-#                 # player.reset_player()
-#                 if is_shown:
-#                     board.print_board()
-#                     # self.graphic(board, p1, p2)
-#                     if winner != 0:
-#                         print("Game end. Winner is player:", winner)
-#                     else:
-#                         print("Game end. Tie")
-#                 player.reset_player()
-#                 return winner, zip(states, mcts_probs, winners_z)

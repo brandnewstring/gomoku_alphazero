@@ -1,0 +1,4 @@
+batch number: 732 trained for 47hours
+data buffer 7000
+board_size=13
+gamma = 0.98

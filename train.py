@@ -16,61 +16,96 @@ from mcts import MCTSPlayer
 from policy_value_net import PolicyValueNet
 
 # training params
-temp = 1.0  # the temperature param
 learn_rate = 2e-3
 lr_multiplier = 1.0  # adaptively adjust the learning rate based on KL
 batch_size = 512  # mini-batch size for training
-data_buffer = deque(maxlen=5000) # data buffer with size 10000
+data_buffer = deque(maxlen=10000) # data buffer with size 7000
 epochs = 5  # num of train_steps for each update
 kl_targ = 0.02
-game_batch_num = 1000
+game_batch_num = 5000
+draw_keep_porb = 0.7
 
 def train():
-    start_time = time.time()
+    training_start_time = time.perf_counter()
+    win_count, lose_count, draw_count, discarded_draws = 0, 0, 0, 0
     for i in range(game_batch_num):
+        iteration_start_time = time.perf_counter()
         new_play_data = None
         # avoid memory not being released
         with ProcessPoolExecutor(max_workers=1) as executor:
             future = executor.submit(collect_selfplay_data)
-            new_play_data = future.result()
+            winner, new_play_data = future.result()
 
+        win_count, lose_count, draw_count, discarded_draws = update_win_status(winner, new_play_data, win_count, lose_count, draw_count, discarded_draws)
+        
+        if not new_play_data:
+            clean_up()
+            print_time(training_start_time, iteration_start_time)
+            continue
+        
         data_buffer.extend(new_play_data)
         print(
             f"\033[33m"
             f"batch i: {i+1}, "
             f"new data len: {len(new_play_data)}, "
             f"data buffer len: {len(data_buffer)}, "
-            f"data buffer size: {asizeof.asizeof(data_buffer)/(1024*1024):.2f} MB"
             f"\033[0m")
 
-        if len(data_buffer) > batch_size:
+        if len(data_buffer) >= batch_size:
             loss, entropy = policy_update()
 
-        time_used = time.time() - start_time
-        current_time = time.strftime("%H:%M:%S", time.localtime())
-        print(
-            f"\033[33m"
-            f"[{current_time}] ⏱️ Used: {int(time_used // 3600)}h "
-            f"{int((time_used % 3600) // 60)}min "
-            f"{int(time_used % 60)}s"
-            f"\033[0m"
-        )
-        
-        gc.collect()
-        K.clear_session()
+        clean_up()
+        print_time(training_start_time, iteration_start_time)
 
-        if (len(data_buffer) > batch_size):
+        if (len(data_buffer) >= batch_size):
             # evaluate and save the best model form time to time, which is async.
             evaluate.run(i)
 
+def update_win_status(winner, new_play_data, current_win, current_lose, current_draw, current_discarded_draws):
+    if winner == 0:
+        if not new_play_data:
+            current_discarded_draws += 1
+        else:
+            current_draw += 1
+    elif winner == 1:
+        current_win += 1
+    elif winner == -1:
+        current_lose += 1
+    print(
+        f"\033[33m"
+        f"Wins: {current_win}, Losses: {current_lose}, Draws: {current_draw} (Discarded: {current_discarded_draws})"
+        f"\033[0m"
+    )
+    return current_win, current_lose, current_draw, current_discarded_draws
+        
 
-def start_self_play(board, mcts_player, is_shown=0, temp=1e-3):
+def print_time(training_start_time, iteration_start_time):
+    cur_time = time.perf_counter()
+    it_time = cur_time - iteration_start_time
+    training_time = cur_time - training_start_time
+    current_time = time.strftime("%H:%M:%S", time.localtime())
+    print(
+        f"\033[33m"
+        f"Current time: {current_time}. Time used: {int(training_time // 3600)}h "
+        f"{int((training_time % 3600) // 60)}min "
+        f"{int(training_time % 60)}s\n"
+        f"Time used this iteration: {int(it_time // 3600)}h "
+        f"{int((it_time % 3600) // 60)}min "
+        f"{int(it_time % 60)}s"
+        f"\033[0m"
+    )
+
+def clean_up():
+    gc.collect()
+    K.clear_session()
+
+def start_self_play(board, mcts_player, is_shown=0):
     """ start a self-play game using a MCTS player, reuse the search tree,
     and store the self-play data: (state, mcts_probs, z) for training
     """
     states, mcts_probs, current_players = [], [], []
     while True:
-        move, move_probs = mcts_player.get_action(board, temp=temp)
+        move, move_probs = mcts_player.get_action(board)
         # store the data
         states.append(board.current_state().astype(np.float32))
         mcts_probs.append(move_probs.astype(np.float32))
@@ -105,12 +140,17 @@ def collect_selfplay_data():
     # create one board per game
     board = Board(board_size, draw_threshold=draw_threshold)
     mcts_player = MCTSPlayer(policy_value_net.policy_value_fn)
-    winner, play_data = start_self_play(board, mcts_player, temp=temp)
+    winner, play_data = start_self_play(board, mcts_player)
+
+    if winner == 0 and np.random.rand() > draw_keep_porb:
+        print(f"Discarded a draw game ")
+        return winner, []  # 返回空数据，train 端不加入 buffer
+    
     play_data = list(play_data)[:]
     play_data = augment_data_by_symmetry(play_data)
 
     policy_value_net.save_model(current_model)
-    return play_data
+    return winner, play_data
 
 
 def augment_data_by_symmetry(play_data):

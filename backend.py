@@ -7,16 +7,17 @@ from typing import Dict
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from policy_value_net import PolicyValueNet
 from pydantic import BaseModel
 
 from config import best_model, board_size, current_model
 from evaluate import sample_from_top_k_with_ties
 from game import Board
+from policy_value_net import PolicyValueNet
 
 session_boards: Dict[str, Board] = {}
 best_value_net = PolicyValueNet(board_size, model_file=best_model)
 current_value_net = PolicyValueNet(board_size, model_file=current_model)
+# choose the net that you are interested in playing against
 value_net = best_value_net
 
 app = FastAPI()
@@ -38,9 +39,9 @@ class FirstMoveRequest(BaseModel):
     session_id: str
 
 def get_action(board):
-    act_probs, value = value_net.policy_value_fn(board)
-    move = sample_from_top_k_with_ties(act_probs, k=1)
-    return move, act_probs
+    legal_probs, value, legal_positions = value_net.policy_value_fn(board)
+    move = sample_from_top_k_with_ties(legal_positions, legal_probs, k=1)
+    return move, legal_probs
 
 @app.post("/get_first_move")
 def get_first_move(data: FirstMoveRequest):
@@ -49,8 +50,8 @@ def get_first_move(data: FirstMoveRequest):
     board = session_boards[session_id]
     move, _ = get_action(board)
     board.do_move(move)
-    ai_coords = board.move_to_location(move)
-    return {"move": [int(ai_coords[0]), int(ai_coords[1])], "status": "ok", "winner": "unknown"}
+    ai_r, ai_c = divmod(move, board.size) 
+    return {"move": [int(ai_r), int(ai_c)], "status": "ok", "winner": "unknown"}
 
 @app.post("/get_move")
 def get_move(data: MoveRequest):
@@ -75,7 +76,7 @@ def get_move(data: MoveRequest):
     # AI move
     move, _ = get_action(board)
     board.do_move(move)
-    ai_coords = board.move_to_location(move)
+    ai_r, ai_c = divmod(move, board.size) 
     print(f"Ai move: x={x}, y={y}", flush=True)
     board.print_board()
     end, winner = board.game_end()
@@ -85,7 +86,7 @@ def get_move(data: MoveRequest):
            return {"move": [-1, -1], "status": "ok", "winner": "draw"} 
         return {"move": [-1, -1], "status": "ok", "winner": "ai"}
 
-    return {"move": [int(ai_coords[0]), int(ai_coords[1])], "status": "ok", "winner": "unknown"}
+    return {"move": [int(ai_r), int(ai_c)], "status": "ok", "winner": "unknown"}
 
 
 @app.post("/reset")

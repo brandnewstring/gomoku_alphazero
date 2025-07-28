@@ -3,6 +3,7 @@ from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
+
 from config import best_model, board_size, current_model, draw_threshold
 from game import Board
 from policy_value_net import PolicyValueNet
@@ -12,7 +13,7 @@ check_freq = 15 # how frequent we check for the best model
 total_games = 120 # total num of games we run to determine which model is better
 win_threshold = 0.02 # the win rate threshold for a model to be considered better
 
-def sample_from_top_k_with_ties(input_dict, k):
+def sample_from_top_k_with_ties(legal_positions, legal_probs, k):
     """
     从概率前k（含并列）的元素中按归一化概率随机返回一个key。
 
@@ -26,41 +27,37 @@ def sample_from_top_k_with_ties(input_dict, k):
     异常:
         ValueError: 如果选中的前k项概率总和为0，则抛出异常。
     """
-    if isinstance(input_dict, zip):
-        input_dict = dict(input_dict)
-    
-    if not input_dict or k <= 0:
-        raise ValueError("输入字典不能为空，且k必须大于0。")
+    if legal_probs.size == 0 or k <= 0:
+        raise ValueError("输入概率不能为空，且k必须大于0。")
 
     # 步骤1：获取前k名的概率阈值
-    sorted_probs = sorted(set(input_dict.values()), reverse=True)
-    if len(sorted_probs) < k:
-        threshold = sorted_probs[-1]
-    else:
-        threshold = sorted_probs[k - 1]
+    # sorted_probs = sorted(set(input_dict.values()), reverse=True)
+    unique_probs = sorted(set(legal_probs), reverse=True)
+    threshold = unique_probs[k - 1] if len(unique_probs) >= k else unique_probs[-1]
 
     # 步骤2：获取所有满足条件的key及其原始概率
-    top_items = {key: prob for key, prob in input_dict.items() if prob >= threshold}
+    top_items = [(pos, prob) for pos, prob in zip(legal_positions, legal_probs) if prob >= threshold]
 
     # 步骤3：归一化概率
-    total = sum(top_items.values())
+    total = sum(prob for _, prob in top_items)
+    # total = sum(top_items.values())
     if total == 0:
         raise ValueError("前k名（含并列）的元素总概率为0，无法归一化。")
 
-    probs = [v / total for v in top_items.values()]
-    keys = list(top_items.keys())
+    norm_probs = [prob / total for _, prob in top_items]
+    keys = [pos for pos, _ in top_items]
 
     # 步骤4：按归一化概率抽样
-    return np.random.choice(keys, p=probs)
+    return np.random.choice(keys, p=norm_probs)
 
-def start_evaluate(board, value_net_1, value_net_2, is_shown=0):
+def start_evaluate(board, value_net_1, value_net_2, is_shown=1):
     """evaluates and save the best model from time to time"""
     players = {1: value_net_1, -1: value_net_2}
     while True:
         player_in_turn = players[board.current_player]
-        act_probs, value = player_in_turn.policy_value_fn(board)
+        legal_probs, value, legal_positions = player_in_turn.policy_value_fn(board)
         # when evaluating, randomly select in the best 3 possible moves
-        move = sample_from_top_k_with_ties(act_probs, 3)
+        move = sample_from_top_k_with_ties(legal_positions, legal_probs, k=3)
         board.do_move(move)
         
         end, winner = board.game_end()
@@ -68,12 +65,6 @@ def start_evaluate(board, value_net_1, value_net_2, is_shown=0):
             if is_shown:
                 board.print_board()
             return winner
-
-def policy_evaluate_using_cpu():
-    """Removes CUDA_VISIBLE_DEVICES so that CPU is used. Must be used in multiprocessing to avoid env issues."""
-    os.environ["CUDA_VISIBLE_DEVICES"] = ""
-    policy_evaluate()
-        
 
 def policy_evaluate():
     """
@@ -113,12 +104,8 @@ def policy_evaluate():
           f"\033[0m")
 
 def run(game_batch_count):
-    # with ProcessPoolExecutor(max_workers=1) as executor:
-    #     future = executor.submit(policy_evaluate)
-    #     result = future.result()
     if (game_batch_count + 1) % check_freq != 0:
-        return
-    
+        return 
     with ProcessPoolExecutor(max_workers=1) as executor:
-        executor.submit(policy_evaluate_using_cpu)
+        executor.submit(policy_evaluate)
     
