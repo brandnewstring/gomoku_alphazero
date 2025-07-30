@@ -13,6 +13,7 @@ from config import best_model, board_size, current_model
 from evaluate import sample_from_top_k_with_ties
 from game import Board
 from policy_value_net import PolicyValueNet
+from mcts import MCTSPlayer
 
 session_boards: Dict[str, Board] = {}
 best_value_net = PolicyValueNet(board_size, model_file=best_model)
@@ -39,19 +40,18 @@ class FirstMoveRequest(BaseModel):
     session_id: str
 
 def get_action(board):
-    legal_probs, value, legal_positions = value_net.policy_value_fn(board)
-    move = sample_from_top_k_with_ties(legal_positions, legal_probs, k=1)
-    return move, legal_probs
+    # legal_probs, value, legal_positions = value_net.policy_value_fn(board)
+    # move = sample_from_top_k_with_ties(legal_positions, legal_probs, k=1)
+    p = MCTSPlayer(value_net.policy_value_fn)
+    return p.get_action(board, False)
 
 @app.post("/get_first_move")
 def get_first_move(data: FirstMoveRequest):
     session_id = data.session_id
     session_boards[session_id] = Board(board_size, start_player=-1)
     board = session_boards[session_id]
-    move, _ = get_action(board)
-    board.do_move(move)
-    ai_r, ai_c = divmod(move, board.size) 
-    return {"move": [int(ai_r), int(ai_c)], "status": "ok", "winner": "unknown"}
+    board.do_move(board_size//2 * board_size + board_size//2)
+    return {"move": [board_size//2, board_size//2], "status": "ok", "winner": "unknown"}
 
 @app.post("/get_move")
 def get_move(data: MoveRequest):

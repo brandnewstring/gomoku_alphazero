@@ -38,13 +38,13 @@ class TreeNode(object):
         self._u = 0.0
         self._P = prior_p
 
-    def expand(self, priors, legal_positions):
+    def expand(self, priors, legal_positions, is_self_play=True):
         """Expand tree by creating new children. It also adds dirichlet noise as AlphaZero.
          priors: a list of tuples of actions and their prior probability
             according to the policy function.
         """
         # 根节点加 Dirichlet 噪声
-        if self.is_root():
+        if is_self_play and self.is_root():
             noise = np.random.dirichlet([alpha] * len(legal_positions))
             priors = (1 - epsilon) * priors + epsilon * noise
     
@@ -110,7 +110,7 @@ class MCTSPlayer(object):
         self._root = TreeNode(None, 1.0)
         self._policy_value_fn = policy_value_fn
 
-    def _playout(self, state):
+    def _playout(self, state, is_self_play=True):
         """Run a single playout from the root to the leaf, getting a value at
         the leaf and propagating it back through its parents.
         State is modified in-place, so a copy must be provided.
@@ -137,11 +137,11 @@ class MCTSPlayer(object):
             # if game not end, we need to expand. we also need to use the predicted value
             # to update the parents because it's the 1st time expand the node.
             legal_probs, leaf_value, legal_positions = self._policy_value_fn(state)
-            node.expand(legal_probs, legal_positions)
+            node.expand(legal_probs, legal_positions, is_self_play)
 
         node.update_recursive(-leaf_value)
 
-    def get_action(self, state, show=False):
+    def get_action(self, state, is_self_play=True, show=False):
         """
         Gets the next move using mcts given a board state. Returns the move and the move probabilities for the whole board.
         """
@@ -152,14 +152,19 @@ class MCTSPlayer(object):
         while n > 0:
             n -= 1
             state_copy = copy.deepcopy(state)
-            self._playout(state_copy)
+            self._playout(state_copy, is_self_play)
     
         # --- 2. 直接构造合法落子的访问次数 ---
         visits = np.array(
             [self._root._children.get(a)._n_visits if a in self._root._children else 0 for a in valid_moves],
             dtype=np.float32
         )
-    
+
+        if not is_self_play:
+            print(visits)
+            index = np.argmax(visits)
+            return valid_moves[index], None
+        
         # --- 3. 转成概率（softmax） ---
         if visits.sum() > 0:
             scaled = np.log(visits + 1e-10) / temp
