@@ -150,6 +150,9 @@ class MCTSPlayer(object):
         # --- 1. MCTS playout ---
         n = n_playout
         while n > 0:
+            # if not self_play, just skip playout if possible move is fixed
+            if not is_self_play and len(valid_moves) <= 1:
+                break
             n -= 1
             state_copy = copy.deepcopy(state)
             self._playout(state_copy, is_self_play)

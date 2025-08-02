@@ -50,8 +50,10 @@ def get_first_move(data: FirstMoveRequest):
     session_id = data.session_id
     session_boards[session_id] = Board(board_size, start_player=-1)
     board = session_boards[session_id]
-    board.do_move(board_size//2 * board_size + board_size//2)
-    return {"move": [board_size//2, board_size//2], "status": "ok", "winner": "unknown"}
+    move_x_y = [board_size//2, board_size//2]
+    move = board.location_to_move(move_x_y)
+    board.do_move(move)
+    return {"move": move_x_y, "status": "ok", "winner": "unknown"}
 
 @app.post("/get_move")
 def get_move(data: MoveRequest):

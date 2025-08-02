@@ -73,7 +73,7 @@ class PolicyValueNet:
         self.model.compile(
             optimizer=self.optimizer,
             loss=['categorical_crossentropy', 'mean_squared_error'],
-            loss_weights=[1.0, 0.01]  # 可调
+            # loss_weights=[1.0, 0.01]  # 可调
         )
 
         if model_file:
